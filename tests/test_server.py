@@ -101,6 +101,8 @@ async def test_disagreement_via_negative_value(server):
         )
         c = await call(client, "cdt_consensus", field="d")
         assert c["top_payload"] == "Merge"
+        assert c["contest_ratio"] == pytest.approx(1.6 / 2.4)
+        assert c["contested"][0]["payloads"][0]["payload"] == "Rebase"
         r = await call(client, "cdt_read", field="d", key="rebase")
         assert r["amplitude"] == pytest.approx(0.2)
         assert sorted(r["payloads"][0]["agents"]) == ["a1", "a3"]
@@ -221,6 +223,9 @@ async def test_decay_and_delete(server):
         await call(client, "cdt_write", field="f", key="k", coherence=1.0)
         d = await call(client, "cdt_decay", field="f", dt=1.0, rate=math.log(2))
         assert d["affected"] == 1 and d["spectral_density"] == pytest.approx(0.25)
+        assert d["decay_id"] and d["factor"] == pytest.approx(0.5)
+        snap = (await call(client, "cdt_snapshot", field="f"))["snapshot"]
+        assert len(snap["decays"]) == 1
         d = await call(client, "cdt_decay", field="f", dt=100.0, rate=1.0)
         assert d["pruned"] == 1
         res = await client.call_tool("cdt_decay", {"field": "f", "dt": -1})
@@ -282,3 +287,18 @@ async def test_concurrent_writes_all_land(server):
         cons = await call(client, "cdt_consensus", field="c", top_k=4)
         assert cons["record_count"] == 40
         assert all(b["amplitude"] == pytest.approx(5.0) for b in cons["alternatives"])
+
+
+async def test_decay_syncs_between_replicas(store, clock):
+    remote_store = FieldStore(clock=clock)
+    async with Client(create_server(store)) as local, Client(create_server(remote_store)) as remote:
+        await call(local, "cdt_write", field="s", key="k", coherence=1.0)
+        snap = (await call(local, "cdt_snapshot", field="s"))["snapshot"]
+        await call(remote, "cdt_sync", field="s", snapshot=snap)
+        await call(local, "cdt_decay", field="s", dt=1.0, rate=math.log(2), prune_below=0.0)
+        snap = (await call(local, "cdt_snapshot", field="s"))["snapshot"]
+        s = await call(remote, "cdt_sync", field="s", snapshot=snap)
+        assert s["absorbed"] == 1
+        lc = await call(local, "cdt_consensus", field="s")
+        rc = await call(remote, "cdt_consensus", field="s")
+        assert lc["amplitude"] == pytest.approx(0.5) == pytest.approx(rc["amplitude"])

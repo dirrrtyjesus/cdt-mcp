@@ -3,6 +3,7 @@
 from .core import (
     CoherenceField,
     ConsensusResult,
+    DecayRecord,
     PayloadWeight,
     ReadResult,
     WriteRecord,
@@ -15,6 +16,7 @@ __version__ = "0.1.0"
 __all__ = [
     "CoherenceField",
     "ConsensusResult",
+    "DecayRecord",
     "FieldExists",
     "FieldNotFound",
     "FieldStore",

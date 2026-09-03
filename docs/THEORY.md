@@ -15,13 +15,25 @@ when `kernel_width > 0`). The field is the superposition
 Ψ(t) = Σ_i  ψ_i · e^{-λ (t - t_i)} · s_i
 ```
 
-where `λ` is the field's continuous `decay_rate` and `s_i` is any explicit scaling applied by
-`decay()`. Reading at a phase returns `|Ψ_k|`. Consensus is
+where `λ` is the field's continuous `decay_rate` and `s_i = Π_{d : t_d ≥ t_i} f_d` is the product
+of every explicit decay event `(t_d, f_d)` recorded at or after the write. Decay events are part
+of the event set, so `s_i` is the same on every replica that holds the same events. Reading at
+a phase returns `|Ψ_k|`. Consensus is
 
 ```
 k* = argmax_k |Ψ_k|
 confidence = |Ψ_k*| / mean_k |Ψ_k|        share = |Ψ_k*| / Σ_k |Ψ_k|
 ```
+
+Alongside the coherent field the *incoherent* field `A_k = Σ_i |w_i| κ_ik` (what bin `k` would
+hold if nothing interfered) gives the contested spectrum
+
+```
+C_k = A_k − |Ψ_k|  ≥ 0                contest_ratio = Σ_k C_k / Σ_k A_k
+```
+
+`C_k` is the energy destroyed by interference in bin `k`. Two proposals that exactly oppose each
+other leave `|Ψ_k| = 0` and would be invisible to `argmax`; they are the peak of `C_k`.
 
 `share` is the quantity to act on: it is 1.0 when a single bin holds all the energy and tends to
 `1/N` when proposals are spread evenly.
@@ -46,8 +58,8 @@ between replicas beyond agreeing on wall-clock time to within the decay time-sca
 |---|---|---|
 | Conflict | detected, resolved by order/ID | never detected; proposals coexist |
 | Result | one winner, deterministic but arbitrary | a field; winner = highest density, losers remain readable |
-| Disagreement | not expressible | negative `value` interferes destructively |
-| Confidence | none | `coherence` scales each impulse; `share` reports contestedness |
+| Disagreement | not expressible | negative `value` interferes destructively; `contested` spectrum shows where |
+| Confidence | none | `coherence` scales each impulse; `share` reports dominance, `contest_ratio` cancellation |
 | Forgetting | tombstones / GC | continuous decay |
 
 ## Interference
@@ -60,9 +72,9 @@ nearby phases partially overlap, so reads between two proposals return an interp
 
 * **Key collisions.** Keys hash to phases; with `N` bins two random keys share a bin with
   probability ≈ `1/N`. Use more bins or explicit phases for many-keyed fields.
-* **`max_records` pruning** drops the weakest events when a field exceeds its cap. This is the
-  one non-monotonic operation and can make replicas diverge. Prefer decay + `prune()` and a
-  generous cap.
+* **Pruning** (`max_records` and `prune()`) drops the weakest events. These are the only
+  non-monotonic operations and can make replicas diverge; explicit decay is an event and does
+  not. Prefer continuous decay and a generous cap.
 * **`tau_k`** is metadata averaged by spectral density on merge. It is informative, not a
   lattice element; don't rely on it for convergence.
 * **Field rendering is O(records × bins)**. With the default 64 bins and 10,000 records a
