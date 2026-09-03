@@ -24,6 +24,7 @@ from .core import (
     DEFAULT_TAU_K,
     MAX_BINS,
     MAX_RECORDS_DEFAULT,
+    BinSummary,
     CoherenceField,
     ConsensusResult,
     PayloadWeight,
@@ -45,11 +46,14 @@ Workflow for multi-agent coordination:
    in `payload`. Negative `value` registers disagreement with that key.
 3. Anyone can cdt_consensus to read the current truth: the phase bin with
    the highest spectral density, its winning payload, and alternatives.
+   Check `contest_ratio` and `contested` too: opposing proposals cancel in
+   the field, so a live disagreement shows up there, not in `alternatives`.
 4. Replicas synchronize with cdt_snapshot -> cdt_sync. Sync is idempotent,
    so re-sending a snapshot is harmless.
 
 Writes never overwrite. Old proposals fade only via decay (continuous
-`decay_rate` on the field, or an explicit cdt_decay).
+`decay_rate` on the field, or an explicit cdt_decay, which is itself a
+synced event).
 """
 
 # --------------------------------------------------------------------------- output models
@@ -121,6 +125,14 @@ class ConsensusOut(BaseModel):
     payloads: list[PayloadOut]
     alternatives: list[BinOut]
     record_count: int
+    contest_ratio: float = Field(
+        description="Fraction of total absolute energy lost to destructive interference, in [0,1]. "
+        "0 = fully coherent; 1 = every proposal cancelled by an opposing one."
+    )
+    contested: list[BinOut] = Field(
+        description="Bins ranked by contested energy sum|w| - |sum w e^(i phi)|; `amplitude` is that energy "
+        "and `share` its fraction of the total. Where opposing payloads cancelled each other."
+    )
 
 
 class ListOut(BaseModel):
@@ -146,6 +158,8 @@ class MergeOut(BaseModel):
 
 class DecayOut(BaseModel):
     field: str
+    decay_id: str = Field(description="Id of the recorded decay event (synced with the field)")
+    factor: float = Field(description="Multiplier exp(-rate*dt) applied to every write made before now")
     affected: int
     pruned: int
     spectral_density: float
@@ -178,6 +192,13 @@ def _info(f: CoherenceField) -> FieldInfo:
     )
 
 
+def _bins(bins: tuple[BinSummary, ...]) -> list[BinOut]:
+    return [
+        BinOut(bin=b.bin, phase=b.phase, amplitude=b.amplitude, share=b.share, payloads=_payloads(b.payloads))
+        for b in bins
+    ]
+
+
 def _consensus(f: CoherenceField, top_k: int = 3) -> ConsensusOut:
     c: ConsensusResult = f.consensus(top_k=top_k)
     return ConsensusOut(
@@ -190,11 +211,10 @@ def _consensus(f: CoherenceField, top_k: int = 3) -> ConsensusOut:
         spectral_density=c.spectral_density,
         top_payload=c.top_payload,
         payloads=_payloads(c.payloads),
-        alternatives=[
-            BinOut(bin=b.bin, phase=b.phase, amplitude=b.amplitude, share=b.share, payloads=_payloads(b.payloads))
-            for b in c.alternatives
-        ],
+        alternatives=_bins(c.alternatives),
         record_count=c.record_count,
+        contest_ratio=c.contest_ratio,
+        contested=_bins(c.contested),
     )
 
 
@@ -435,20 +455,33 @@ def create_server(store: FieldStore | None = None, *, name: str = "cdt-mcp") -> 
 
     @server.tool(annotations=DESTRUCTIVE)
     async def cdt_decay(field: str, dt: float, rate: float | None = None, prune_below: float = 1e-9) -> DecayOut:
-        """Apply an instantaneous decay exp(-rate*dt) to every impulse, then prune negligible ones.
+        """Record a decay event exp(-rate*dt) on every impulse written so far, then prune negligible ones.
 
         Use to deliberately forget stale context. `rate` defaults to the field's
-        own decay_rate. Irreversible.
+        own decay_rate. The decay is stored as an event and travels with
+        snapshots, so replicas that sync afterwards see the same fading.
+        Pruning (if `prune_below` > 0) physically drops writes and is the
+        irreversible part.
         """
         async with store.lock:
             f = _get(store, field)
+            n_before = len(f.decays)
             try:
                 affected = f.decay(dt, rate)
             except ValueError as exc:
                 raise ToolError(str(exc)) from None
-            pruned = f.prune(prune_below)
+            decays = f.decays
+            latest = decays[-1] if len(decays) > n_before else None
+            pruned = f.prune(prune_below) if prune_below > 0 else 0
             store.flush(field)
-            return DecayOut(field=field, affected=affected, pruned=pruned, spectral_density=f.spectral_density())
+            return DecayOut(
+                field=field,
+                decay_id=latest.id if latest else "",
+                factor=latest.factor if latest else 1.0,
+                affected=affected,
+                pruned=pruned,
+                spectral_density=f.spectral_density(),
+            )
 
     @server.tool(annotations=DESTRUCTIVE)
     async def cdt_delete(field: str) -> DeleteOut:
@@ -504,8 +537,11 @@ def create_server(store: FieldStore | None = None, *, name: str = "cdt-mcp") -> 
             "`payload` = a one-sentence statement of the option, and your `agent_id`.\n"
             "   To register disagreement with an option, write to its key with a negative `value`.\n"
             "3. Call cdt_consensus again. The `top_payload` at the highest-density bin is the "
-            "current group truth; `share` tells you how contested it is.\n"
-            "4. Report the consensus, its share, and the strongest alternative."
+            "current group truth; `share` tells you how dominant it is. Then look at "
+            "`contest_ratio` and `contested`: options that were proposed and opposed cancel out "
+            "of the field, so an open disagreement appears there rather than in `alternatives`.\n"
+            "4. Report the consensus, its share, the strongest alternative, and any contested "
+            "option with the agents on each side."
         )
 
     _ = (cdt_create, cdt_write, cdt_read, cdt_consensus, cdt_list, cdt_snapshot, cdt_sync)

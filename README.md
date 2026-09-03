@@ -95,7 +95,7 @@ docker run -p 8000:8000 -v cdt-state:/state cdt-mcp
 | `cdt_snapshot` | Export a field as JSON for another replica. |
 | `cdt_sync` | Absorb a remote snapshot. Idempotent union of write events. |
 | `cdt_merge` | Superpose several local fields into one. |
-| `cdt_decay` | Apply an instantaneous decay, then prune negligible impulses. |
+| `cdt_decay` | Record a decay event on all writes so far, then prune negligible impulses. |
 | `cdt_list`, `cdt_delete`, `cdt_phase_of` | Housekeeping and the key-to-phase hash. |
 
 Resources: `cdt://fields`, `cdt://field/{name}`, `cdt://field/{name}/consensus`.
@@ -136,15 +136,15 @@ The core has no MCP dependency:
 ```python
 from cdt_mcp import CoherenceField
 
-a = CoherenceField("replica-a", bins=64, decay_rate=1 / 3600)   # fades over hours
+a = CoherenceField("replica-a", bins=64, decay_rate=1 / 3600)  # fades over hours
 a.write(1.0, key="hypothesis:H1", coherence=0.8, payload="H1", agent_id="alice")
 
 b = CoherenceField("replica-b", bins=64)
 b.write(1.0, key="hypothesis:H2", coherence=0.6, payload="H2", agent_id="bob")
 
-a.merge_from(b)                      # union of write events; idempotent
-print(a.consensus().top_payload)     # "H1"
-snapshot = a.to_dict()               # JSON-safe
+a.merge_from(b)  # union of write events; idempotent
+print(a.consensus().top_payload)  # "H1"
+snapshot = a.to_dict()  # JSON-safe
 ```
 
 See [`examples/multi_agent_merge.py`](examples/multi_agent_merge.py) for a runnable end-to-end
@@ -153,13 +153,18 @@ client script and [`docs/THEORY.md`](docs/THEORY.md) for the model and its guara
 ## Semantics and guarantees
 
 * **Writes superpose.** `write` never replaces; the field is `Σ` over all retained impulses.
-* **Sync is a set union of write events** keyed by UUID. It is idempotent, commutative and
-  associative, so replicas converge regardless of delivery order or duplication. The only
-  exception is the `max_records` cap: when exceeded, the weakest impulses are pruned, which can
-  make replicas diverge. Size fields accordingly (default 10,000 events).
+* **Sync is a set union of events** (writes and explicit decays) keyed by UUID. It is
+  idempotent, commutative and associative, so replicas converge regardless of delivery order
+  or duplication. The only exceptions are pruning operations: the `max_records` cap and
+  `prune_below` drop the weakest impulses, which can make replicas diverge. Size fields
+  accordingly (default 10,000 events).
 * **Decay is continuous and clock-based.** An impulse's weight at time *t* is
-  `coherence · value · exp(-decay_rate · (t - t_write))`. `cdt_decay` applies an extra,
-  irreversible scaling on top.
+  `coherence · value · exp(-decay_rate · (t - t_write))`. `cdt_decay` records an extra decay
+  *event* that multiplies every write made before it; it syncs like a write, so replicas that
+  decayed at different moments still agree.
+* **Disagreement is visible.** Opposing proposals cancel in the coherent field, so
+  `cdt_consensus` also returns `contest_ratio` and the most `contested` bins
+  (`Σ|w| − |Σ w·e^{iφ}|` per bin) with the payloads and agents on each side.
 * **Keys hash to phases** via SHA-256, so the same key lands in the same bin on every replica.
   With 64 bins, distinct keys collide with probability ~1/64 per pair; raise `bins` if you use
   many keys in one field, or use explicit `phase` values.

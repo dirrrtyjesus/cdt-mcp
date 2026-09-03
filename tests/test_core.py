@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from cdt_mcp.core import CoherenceField, WriteRecord, normalize_phase, phase_from_key
+from cdt_mcp.core import CoherenceField, DecayRecord, WriteRecord, normalize_phase, phase_from_key
 
 
 class FakeClock:
@@ -156,8 +156,9 @@ def test_snapshot_roundtrip_is_json_safe_and_exact():
     f.write(2.0, key="alpha", coherence=0.4, payload="A", agent_id="agent-1")
     f.write(-1.0, phase=1.234, coherence=1.0)
     data = json.loads(json.dumps(f.to_dict(include_field=True)))
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
     assert len(data["field"]) == 32
+    assert len(data["contested"]) == 32
     g = CoherenceField.from_dict(data, clock=clock)
     assert g.name == "snap" and g.bins == 32 and g.decay_rate == 0.01 and g.tau_k == 8.1
     assert g.kernel_width == 0.2
@@ -201,3 +202,93 @@ def test_absorb_with_explicit_record_ids_dedupes():
     rec = WriteRecord(id="fixed", phase=0.0, value=1.0, coherence=1.0, timestamp=0.0)
     assert f.absorb([rec, rec]) == 1
     assert f.absorb([rec]) == 0
+
+
+def test_explicit_decay_is_an_event_and_merge_stays_commutative():
+    clock = FakeClock(100.0)
+    a = CoherenceField("a", bins=8, clock=clock)
+    b = CoherenceField("b", bins=8, clock=clock)
+    rec = a.write(1.0, key="x", payload="X", record_id="r1")
+    b.absorb([rec])
+    # Only replica a applies an explicit decay.
+    a.decay(10.0, rate=0.1)
+    assert len(a.decays) == 1 and len(b.decays) == 0
+
+    ab = CoherenceField.merge("ab", [a, b], clock=clock)
+    ba = CoherenceField.merge("ba", [b, a], clock=clock)
+    np.testing.assert_allclose(ab.field(), ba.field())
+    assert ab.consensus().amplitude == pytest.approx(math.exp(-1.0))
+    # The decay travels: b now fades the same way once it absorbs a's events.
+    assert b.merge_from(a) == 1
+    assert b.read(key="x").amplitude == pytest.approx(math.exp(-1.0))
+    # Idempotent for decays too.
+    assert b.merge_from(a) == 0
+
+
+def test_decay_only_applies_to_writes_made_before_it():
+    clock = FakeClock(0.0)
+    f = CoherenceField("t", bins=8, clock=clock)
+    f.write(1.0, phase=0.0, payload="old")
+    clock.t = 10.0
+    assert f.decay(1.0, rate=math.log(2)) == 1
+    clock.t = 20.0
+    f.write(1.0, phase=math.pi, payload="new")
+    assert f.read(phase=0.0).amplitude == pytest.approx(0.5)
+    assert f.read(phase=math.pi).amplitude == pytest.approx(1.0)
+    # Two decays stack multiplicatively, and the newer write only sees the later one.
+    clock.t = 30.0
+    assert f.decay(1.0, rate=math.log(2)) == 2
+    assert f.read(phase=0.0).amplitude == pytest.approx(0.25)
+    assert f.read(phase=math.pi).amplitude == pytest.approx(0.5)
+    assert f.decay_multiplier(35.0) == 1.0
+
+
+def test_decay_events_survive_snapshot_roundtrip():
+    clock = FakeClock(5.0)
+    f = CoherenceField("t", bins=8, clock=clock)
+    f.write(1.0, phase=0.0)
+    f.decay(1.0, rate=math.log(4))
+    data = json.loads(json.dumps(f.to_dict()))
+    assert len(data["decays"]) == 1
+    g = CoherenceField.from_dict(data, clock=clock)
+    assert len(g.decays) == 1
+    np.testing.assert_allclose(g.field(), f.field())
+    with pytest.raises(ValueError):
+        DecayRecord.from_dict({"id": "d", "timestamp": 0.0, "factor": 1.5})
+
+
+def test_schema_1_scale_is_folded_into_value():
+    data = {
+        "schema_version": 1,
+        "name": "legacy",
+        "bins": 8,
+        "records": [{"id": "r", "phase": 0.0, "value": 2.0, "coherence": 1.0, "timestamp": 0.0, "scale": 0.25}],
+    }
+    f = CoherenceField.from_dict(data, clock=FakeClock())
+    assert f.read(phase=0.0).amplitude == pytest.approx(0.5)
+
+
+def test_consensus_exposes_contested_bins_and_ratio():
+    f = CoherenceField("t", bins=8, clock=FakeClock())
+    f.write(1.0, key="plan", payload="ship", agent_id="A")
+    f.write(-1.0, key="plan", payload="hold", agent_id="B")
+    f.write(0.2, key="other", payload="lunch", agent_id="C")
+    c = f.consensus()
+    # The coherent field only sees the unopposed proposal...
+    assert c.top_payload == "lunch" and c.share == pytest.approx(1.0)
+    assert f.read(key="plan").amplitude == pytest.approx(0.0)
+    # ...but the contested spectrum shows where the disagreement lives.
+    assert c.contest_ratio == pytest.approx(2.0 / 2.2)
+    assert c.contested[0].bin == f.bin_index(phase_from_key("plan"))
+    assert c.contested[0].amplitude == pytest.approx(2.0)
+    assert c.contested[0].share == pytest.approx(1.0)
+    assert {p.payload for p in c.contested[0].payloads} == {"ship", "hold"}
+    np.testing.assert_allclose(f.contested_field().sum(), 2.0)
+
+    # A fully coherent field has nothing contested.
+    g = CoherenceField("g", bins=8, clock=FakeClock())
+    g.write(1.0, key="a")
+    g.write(0.5, key="a")
+    assert g.consensus().contest_ratio == 0.0 and g.consensus().contested == ()
+    # An empty field reports zeros.
+    assert CoherenceField("e", bins=8).consensus().contest_ratio == 0.0
