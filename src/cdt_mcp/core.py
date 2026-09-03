@@ -40,6 +40,10 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
+
+ComplexField = npt.NDArray[np.complex128]
+RealField = npt.NDArray[np.float64]
 
 TWO_PI = 2.0 * math.pi
 SCHEMA_VERSION = 1
@@ -70,9 +74,9 @@ def normalize_phase(phase: float) -> float:
     return phase % TWO_PI
 
 
-def circular_distance(a: np.ndarray | float, b: float) -> np.ndarray | float:
-    """Shortest angular distance between phases (radians)."""
-    delta = np.abs((np.asarray(a) - b + math.pi) % TWO_PI - math.pi)
+def circular_distance(a: npt.ArrayLike, b: float) -> RealField:
+    """Shortest angular distance between phases (radians), elementwise."""
+    delta: RealField = np.abs((np.asarray(a, dtype=np.float64) - b + math.pi) % TWO_PI - math.pi)
     return delta
 
 
@@ -222,7 +226,7 @@ class CoherenceField:
         self._clock = clock
         self.created_at = float(created_at if created_at is not None else clock())
         self.updated_at = self.created_at
-        self.phase_space: np.ndarray = np.linspace(0.0, TWO_PI, bins, endpoint=False)
+        self.phase_space: RealField = np.linspace(0.0, TWO_PI, bins, endpoint=False, dtype=np.float64)
         self._records: dict[str, WriteRecord] = {}
 
     # ------------------------------------------------------------------ basics
@@ -242,15 +246,16 @@ class CoherenceField:
         phase = normalize_phase(phase)
         return int(np.argmin(circular_distance(self.phase_space, phase)))
 
-    def _kernel(self, phase: float) -> np.ndarray:
+    def _kernel(self, phase: float) -> RealField:
         """Distribution of one impulse across bins (sums to 1)."""
+        k: RealField
         if self.kernel_width == 0.0:
-            k = np.zeros(self.bins)
+            k = np.zeros(self.bins, dtype=np.float64)
             k[self.bin_index(phase)] = 1.0
             return k
         d = circular_distance(self.phase_space, phase)
         k = np.exp(-(d**2) / (2.0 * self.kernel_width**2))
-        total = k.sum()
+        total = float(k.sum())
         return k / total if total > 0 else k
 
     # ------------------------------------------------------------------ writes
@@ -315,10 +320,10 @@ class CoherenceField:
 
     # ------------------------------------------------------------------ field
 
-    def field(self, now: float | None = None) -> np.ndarray:
+    def field(self, now: float | None = None) -> ComplexField:
         """Complex coherence field at time ``now`` (defaults to the clock)."""
         t = self.now() if now is None else now
-        psi = np.zeros(self.bins, dtype=complex)
+        psi: ComplexField = np.zeros(self.bins, dtype=np.complex128)
         for rec in self._records.values():
             w = rec.weight(t, self.decay_rate)
             if w == 0.0:
