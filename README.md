@@ -7,8 +7,7 @@ Multi-agent state synchronization by wave superposition instead of conflict reso
 [![PyPI](https://img.shields.io/pypi/v/cdt-mcp.svg)](https://pypi.org/project/cdt-mcp/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-When several Claude Code, Gemini / Antigravity, or other MCP clients work on the same
-problem, they need a place to reconcile diverging state. CRDTs do this by detecting conflicts
+When several Claude Code, Gemini / Antigravity, or other MCP clients work simultaneously.. they need a place to reconcile diverging state. CRDTs do this by detecting conflicts
 and imposing an order. A CDT does something different: every proposal is a coherence impulse
 added to a shared complex field,
 
