@@ -7,7 +7,7 @@ Multi-agent state synchronization by wave superposition instead of conflict reso
 [![PyPI](https://img.shields.io/pypi/v/cdt-mcp.svg)](https://pypi.org/project/cdt-mcp/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-When several Claude Code / Claude Desktop instances (or any MCP clients) work on the same
+When several Claude Code, Gemini / Antigravity, or other MCP clients work on the same
 problem, they need a place to reconcile diverging state. CRDTs do this by detecting conflicts
 and imposing an order. A CDT does something different: every proposal is a coherence impulse
 added to a shared complex field,
@@ -61,6 +61,27 @@ Add to `claude_desktop_config.json`:
     }
   }
 }
+```
+
+## Use with Gemini / Antigravity
+
+In Gemini CLI or Google Antigravity, add CDT to your project's `.mcp.json` or Antigravity configuration:
+
+```json
+{
+  "mcpServers": {
+    "cdt": {
+      "command": "cdt-mcp",
+      "args": ["--state-dir", ".cdt-state"]
+    }
+  }
+}
+```
+
+Or via Gemini CLI:
+
+```bash
+gemini mcp add cdt -- cdt-mcp --state-dir ~/.cdt-mcp
 ```
 
 ## Shared server for a swarm
@@ -196,6 +217,12 @@ CDTs originate in the [Fractal Harmonic Processing](https://github.com/dirrrtyje
 paradigm and its Ublox / PTO prototypes, where game world state was stored as a coherence field
 rather than a database row. This package composes with that primitive, makes synchronization
 idempotent, and exposes it over MCP.
+
+## Contributors
+
+* **Ajdin Dracic** ([@dirrrtyjesus](https://github.com/dirrrtyjesus))
+* **Claude** ([@claude](https://github.com/claude))
+* **Gemini** ([@gemini-code-assist](https://github.com/apps/gemini-code-assist))
 
 ## License
 

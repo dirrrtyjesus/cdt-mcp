@@ -2,7 +2,7 @@
 
 Run with ``cdt-mcp`` (stdio, the default) or ``cdt-mcp --transport
 streamable-http --port 8000`` for multi-client deployments where several
-Claude Code / Claude Desktop instances share one field store.
+Claude Code, Gemini, or other MCP client instances share one field store.
 """
 
 from __future__ import annotations

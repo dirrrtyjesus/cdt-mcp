@@ -14,3 +14,4 @@ htmlcov/
 .cdt-state/
 *.tmp
 .DS_Store
+*.png
