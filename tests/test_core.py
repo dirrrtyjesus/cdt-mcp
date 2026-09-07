@@ -324,3 +324,54 @@ def test_narration_usurps_consensus_in_a_mixed_field_and_not_in_a_split_one():
     # The fix: policy read from the execution field alone.
     assert execution.consensus().top_payload == "parent queue"
     assert narration.consensus().record_count == 3
+
+
+def test_read_at_past_now_excludes_writes_and_decays_from_the_future():
+    """Reading the past must not see the future.
+
+    Before: ``weight`` clamped age to zero, so a write stamped *after* ``now``
+    contributed at full strength, and ``decay_multiplier`` applied every decay
+    at or after the write regardless of ``now``.
+    """
+    clock = FakeClock(100.0)
+    f = CoherenceField("t", bins=8, clock=clock)
+    f.write(1.0, key="k", coherence=1.0, timestamp=10.0)
+    f.write(1.0, key="k", coherence=1.0, timestamp=50.0)
+    f.decay(dt=1.0, rate=math.log(2), timestamp=70.0)  # halves everything written by t=70
+
+    assert f.read(key="k", now=5.0).amplitude == 0.0  # nothing has happened yet
+    assert f.read(key="k", now=10.0).amplitude == pytest.approx(1.0)  # first write, inclusive
+    assert f.read(key="k", now=30.0).amplitude == pytest.approx(1.0)  # second write not yet
+    assert f.read(key="k", now=60.0).amplitude == pytest.approx(2.0)  # both, decay not yet
+    assert f.read(key="k", now=70.0).amplitude == pytest.approx(1.0)  # decay applied
+    assert f.read(key="k", now=100.0).amplitude == pytest.approx(1.0)  # and stays applied
+    assert f.consensus(now=5.0).record_count == 2  # records are kept; they just do not weigh yet
+    assert f.decay_multiplier(10.0, now=60.0) == 1.0
+    assert f.decay_multiplier(10.0, now=70.0) == pytest.approx(0.5)
+
+
+def test_prune_to_capacity_does_not_punish_a_replica_whose_clock_runs_ahead():
+    clock = FakeClock(100.0)
+    f = CoherenceField("p", bins=8, max_records=2, clock=clock)
+    f.write(1.0, key="a", coherence=0.2, timestamp=100.0)
+    f.write(1.0, key="b", coherence=0.9, timestamp=100.0)
+    f.write(1.0, key="c", coherence=0.9, timestamp=103.0)  # absorbed from a replica 3s ahead
+    assert {r.key for r in f.records} == {"b", "c"}
+
+
+def test_signed_read_goes_negative_when_objections_out_weigh_proposals():
+    """``amplitude`` is |psi| and cannot tell a live proposal from a defeated one."""
+    clock = FakeClock()
+    f = CoherenceField("s", bins=16, clock=clock)
+    f.write(1.0, key="rule", coherence=0.3, payload="keep it")
+    f.write(-1.0, key="rule", coherence=0.8, payload="drop it")
+    r = f.read(key="rule")
+    assert r.amplitude == pytest.approx(0.5)  # looks alive
+    assert r.signed == pytest.approx(-0.5)  # is not
+    # Along the proposal's own phasor the sign is exact; a read a quarter turn away sees ~0.
+    q = f.read(phase=phase_from_key("rule") + math.pi / 2)
+    assert q.bin != r.bin or abs(q.signed) < 1e-9
+    # A pure proposal reads positive and equal to its amplitude.
+    g = CoherenceField("g", bins=16, clock=clock)
+    g.write(1.0, key="rule", coherence=0.6)
+    assert g.read(key="rule").signed == pytest.approx(g.read(key="rule").amplitude)

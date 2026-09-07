@@ -25,7 +25,6 @@ Run:  python field_claude_md.py [--plot ratchet.png]
 from __future__ import annotations
 
 import argparse
-import cmath
 import math
 from dataclasses import dataclass
 
@@ -116,19 +115,16 @@ class FieldClaudeMd:
         out: list[Line] = []
         for b, key in self._bins.items():
             r = self.instructions.read(key=key, now=now)
-            # Every write at this key shares one phase, so psi[bin] = net * e^{i phase}.
-            # Project back onto the key's phasor for a *signed* net: amplitude alone
-            # would count an objection that out-weighs its rule as "live".
-            net = (r.real + 1j * r.imag) * cmath.exp(-1j * phase_from_key(key))
+            # `signed`, not `amplitude`: an objection that out-weighs its rule must read as dead.
             pos = [rec for rec in self.instructions.records if rec.key == key and rec.value > 0]
             latest = max(pos, key=lambda rec: rec.timestamp)
-            if net.real < floor:
+            if r.signed < floor:
                 continue
             out.append(
                 Line(
                     key=key,
                     text=latest.payload or "",
-                    energy=float(net.real),
+                    energy=r.signed,
                     contested=float(contested[b]),
                     age=now - latest.timestamp,
                     affirmations=len(pos),
@@ -298,9 +294,9 @@ HISTORY: list[Event] = [
 def build(until: float) -> tuple[FieldClaudeMd, list[str]]:
     """Replay history up to ``until``. Returns the field file and the append-only ratchet.
 
-    Replaying instead of reading the past from one field matters: ``core``
-    clamps age to ``max(0, now - timestamp)``, so a read at a past ``now``
-    would count *future* records at full strength.
+    (Replay is only needed for the ratchet count now: since reads at a past
+    ``now`` exclude future events, one field written once can be read at any
+    commit -- see ``rewind`` below.)
     """
     md, ratchet = FieldClaudeMd(), []
     for kind, commit, kw in HISTORY:
@@ -313,6 +309,14 @@ def build(until: float) -> tuple[FieldClaudeMd, list[str]]:
         else:
             md.contest(commit=float(commit), **kw)
     return md, ratchet
+
+
+def rewind() -> None:
+    """The same history written once, read at three moments -- no replay."""
+    md, _ = build(1e9)
+    for t in (25.0, 100.0, 160.0):
+        print(md.render(now=t))
+        print()
 
 
 def samples() -> list[tuple[float, int, int]]:
@@ -349,10 +353,7 @@ def main() -> None:
     ap.add_argument("--plot", metavar="PNG")
     args = ap.parse_args()
 
-    for t in (25.0, 100.0, 160.0):
-        md, _ = build(t)
-        print(md.render(now=t))
-        print()
+    rewind()
     md, ratchet = build(160.0)
     print(md.render_rationale(now=160.0))
     print()

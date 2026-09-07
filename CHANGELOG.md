@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- **Reading the past no longer sees the future.** A write with `timestamp > now` weighs `0`
+  at `now` (age was clamped to zero, so it contributed at full strength), and
+  `decay_multiplier(timestamp, now)` applies only decays recorded in `[timestamp, now]`.
+  `read`, `consensus`, `field`, `contested_field` and `spectral_density` with an explicit past
+  `now` are now consistent with what the field looked like then. Capacity pruning ranks at a
+  time no earlier than any record, so a replica whose clock runs slightly ahead is not pruned
+  first.
+
+### Added
+- `ReadResult.signed` (and `signed` on `cdt_read`): the field's component along the read
+  phasor, `Re(psi[bin] * e^{-i phase})`. For a key read this is the net signed weight at the
+  key. `amplitude` is `|psi|` and cannot distinguish a live proposal from one whose objections
+  out-weigh it; `signed` can.
+
 ### Changed
 - **Explicit decay is now an event.** `CoherenceField.decay()` records a `DecayRecord`
   (timestamp, factor) instead of rewriting each write's `scale`, and the factor is applied at

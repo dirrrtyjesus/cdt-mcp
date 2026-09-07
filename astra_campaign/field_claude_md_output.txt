@@ -31,5 +31,3 @@
 
 ratchet after 160 commits: 5 instructions, 0 deleted
 field   after 160 commits: 3 live, 11 records kept, 0 deleted
-
-wrote ../astra_campaign/ratchet.png

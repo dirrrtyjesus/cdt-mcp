@@ -102,6 +102,7 @@ class ReadOut(BaseModel):
     amplitude: float
     real: float
     imag: float
+    signed: float
     payloads: list[PayloadOut]
 
 
@@ -363,6 +364,7 @@ def create_server(store: FieldStore | None = None, *, name: str = "cdt-mcp") -> 
             amplitude=r.amplitude,
             real=r.real,
             imag=r.imag,
+            signed=r.signed,
             payloads=_payloads(r.payloads),
         )
 

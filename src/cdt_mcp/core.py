@@ -34,6 +34,12 @@ Implementation notes
   destructive interference. Opposing proposals cancel in the coherent
   field and would otherwise vanish from view; the contested spectrum is
   where a field's disagreement becomes visible.
+* A read at time ``now`` sees only events with ``timestamp <= now``: a
+  write is not in the field before it happened and a decay has not applied
+  before it was recorded. (Schema 2 clamped age to zero, so reading the
+  past counted the future at full strength.) ``ReadResult.signed`` is the
+  field's component along the read phasor, so a key whose objections
+  out-weigh its proposals reads negative instead of merely "energetic".
 * Phase bins are ``linspace(0, 2*pi, bins, endpoint=False)`` with circular
   nearest-bin snapping. (The original prototype used ``endpoint=True``,
   which aliased bin 0 and the last bin.)
@@ -109,11 +115,16 @@ class WriteRecord:
     def weight(self, now: float, decay_rate: float, explicit: float = 1.0) -> float:
         """Signed real weight of this impulse at time ``now``.
 
+        A write is not part of the field before it happened: ``timestamp > now``
+        weighs ``0``. (Earlier schema clamped age to zero instead, so a read at
+        a past ``now`` counted future writes at full strength.)
+
         ``explicit`` is the product of every :class:`DecayRecord` factor that
-        applies to this write (see :meth:`CoherenceField.decay_multiplier`).
+        applies to this write at ``now`` (see :meth:`CoherenceField.decay_multiplier`).
         """
-        age = max(0.0, now - self.timestamp)
-        return self.coherence * self.value * explicit * math.exp(-decay_rate * age)
+        if self.timestamp > now:
+            return 0.0
+        return self.coherence * self.value * explicit * math.exp(-decay_rate * (now - self.timestamp))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -185,8 +196,17 @@ class ReadResult:
     bin: int
     bin_phase: float
     amplitude: float
+    """``|psi[bin]|``. Unsigned: an objection that out-weighs its proposal still reads as energy."""
     real: float
     imag: float
+    signed: float
+    """``Re(psi[bin] * e^{-i phase})``: the field's component along the read phasor.
+
+    Writes at one key share one phase, so for a key read this is the net
+    signed weight at that key -- positive when proposals carry it, negative
+    when objections do. Use it, not ``amplitude``, to ask "is this proposal
+    alive?".
+    """
     payloads: tuple[PayloadWeight, ...]
 
 
@@ -300,7 +320,7 @@ class CoherenceField:
         self.phase_space: RealField = np.linspace(0.0, TWO_PI, bins, endpoint=False, dtype=np.float64)
         self._records: dict[str, WriteRecord] = {}
         self._decays: dict[str, DecayRecord] = {}
-        # Sorted decay timestamps and suffix products of their factors, rebuilt lazily.
+        # Sorted decay timestamps and their factors, rebuilt lazily.
         self._decay_index: tuple[list[float], list[float]] | None = None
 
     # ------------------------------------------------------------------ basics
@@ -322,19 +342,25 @@ class CoherenceField:
     def __len__(self) -> int:
         return len(self._records)
 
-    def decay_multiplier(self, timestamp: float) -> float:
-        """Product of the factors of every explicit decay at or after ``timestamp``."""
+    def decay_multiplier(self, timestamp: float, now: float | None = None) -> float:
+        """Product of the factors of every explicit decay in ``[timestamp, now]``.
+
+        A decay recorded after ``now`` has not happened yet from the point of
+        view of a read at ``now``. ``now`` defaults to the clock.
+        """
         if not self._decays:
             return 1.0
+        t = self.now() if now is None else now
         if self._decay_index is None:
             ordered = sorted(self._decays.values(), key=lambda d: (d.timestamp, d.id))
-            stamps = [d.timestamp for d in ordered]
-            suffix = [1.0] * (len(ordered) + 1)
-            for i in range(len(ordered) - 1, -1, -1):
-                suffix[i] = suffix[i + 1] * ordered[i].factor
-            self._decay_index = (stamps, suffix)
-        stamps, suffix = self._decay_index
-        return suffix[bisect.bisect_left(stamps, timestamp)]
+            self._decay_index = ([d.timestamp for d in ordered], [d.factor for d in ordered])
+        stamps, factors = self._decay_index
+        lo = bisect.bisect_left(stamps, timestamp)
+        hi = bisect.bisect_right(stamps, t)
+        out = 1.0
+        for f in factors[lo:hi]:
+            out *= f
+        return out
 
     def now(self) -> float:
         return float(self._clock())
@@ -415,10 +441,12 @@ class CoherenceField:
         return True
 
     def _weight(self, rec: WriteRecord, now: float) -> float:
-        return rec.weight(now, self.decay_rate, self.decay_multiplier(rec.timestamp))
+        return rec.weight(now, self.decay_rate, self.decay_multiplier(rec.timestamp, now))
 
     def _prune_to_capacity(self) -> None:
-        now = self.now()
+        # Rank at a time no earlier than any record, so a write from a replica
+        # whose clock runs slightly ahead is not the first thing pruned.
+        now = max(self.now(), max(r.timestamp for r in self._records.values()))
         ranked = sorted(
             self._records.values(),
             key=lambda r: (abs(self._weight(r, now)), r.timestamp),
@@ -501,6 +529,7 @@ class CoherenceField:
             amplitude=float(abs(z)),
             real=float(z.real),
             imag=float(z.imag),
+            signed=float((z * np.exp(-1j * phase)).real),
             payloads=self._bin_payloads(idx, rendering),
         )
 

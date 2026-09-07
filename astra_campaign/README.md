@@ -88,8 +88,10 @@ python field_claude_md.py --plot ratchet.png
 
 Output: `field_claude_md_output.txt`, `ratchet.png`.
 
-Two things this surfaced in `core.py`, both worth their own issue: `read(now=past)`
-counts records with `timestamp > now` at full strength (age is clamped to 0), so
-the demo replays history instead of reading the past; and per-key `amplitude` is
-unsigned, so an objection that out-weighs its rule still reads as energy — the
-demo projects ψ onto the key's phasor for a signed net.
+Two things this surfaced in `core.py`, now fixed there with tests that fail on the
+previous tree: `read(now=past)` counted records with `timestamp > now` at full
+strength (age was clamped to 0), so the demo had to replay history instead of
+reading the past — it now writes the history once and rewinds; and per-key
+`amplitude` is unsigned, so an objection that out-weighs its rule read as energy —
+`ReadResult.signed` is the field's component along the read phasor, and the demo
+uses it.
