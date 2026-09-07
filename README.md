@@ -168,7 +168,9 @@ snapshot = a.to_dict()  # JSON-safe
 ```
 
 See [`examples/multi_agent_merge.py`](examples/multi_agent_merge.py) for a runnable end-to-end
-client script and [`docs/THEORY.md`](docs/THEORY.md) for the model and its guarantees.
+client script, [`astra_campaign/`](astra_campaign/) for a multi-agent orchestration case study
+demonstrating the separation of narration and execution, and [`docs/THEORY.md`](docs/THEORY.md) for the
+model, foundational design principles, and guarantees.
 
 ## Semantics and guarantees
 
@@ -185,6 +187,10 @@ client script and [`docs/THEORY.md`](docs/THEORY.md) for the model and its guara
 * **Disagreement is visible.** Opposing proposals cancel in the coherent field, so
   `cdt_consensus` also returns `contest_ratio` and the most `contested` bins
   (`Σ|w| − |Σ w·e^{iφ}|` per bin) with the payloads and agents on each side.
+* **Separation of narration and execution.** Explanations and operational proposals must occupy
+  disjoint fields. Superposing explanations into an execution field allows articulate narration to
+  out-accumulate worker impulses and masquerade as consensus. Policy must be read strictly from
+  execution fields (see [`docs/THEORY.md`](docs/THEORY.md)).
 * **Keys hash to phases** via SHA-256, so the same key lands in the same bin on every replica.
   With 64 bins, distinct keys collide with probability ~1/64 per pair; raise `bins` if you use
   many keys in one field, or use explicit `phase` values.

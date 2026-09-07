@@ -68,6 +68,38 @@ Two impulses in the same bin add as complex numbers with (almost) the same phase
 constructive. A negative `value` flips the sign and cancels. With `kernel_width > 0`, impulses at
 nearby phases partially overlap, so reads between two proposals return an interpolated blend.
 
+## Foundational design: separation of narration and execution
+
+When LLM agents collaborate, they naturally emit two distinct classes of impulses:
+
+1. **Operational proposals (execution)**: concrete changes, code patches, routing decisions, and test results (e.g. `tests:parent-owned-queue`).
+2. **Meta-commentary (narration)**: diagnostic descriptions, explanations of bottlenecks, and rationalizations (e.g. `explanation:bottleneck-identified`).
+
+Because frontier LLMs generate structured, highly articulated explanations, orchestrators often assign high confidence (`coherence`) to their own narrative diagnostics.
+
+### The narration usurpation pathology
+
+If execution proposals and narrative commentary are superposed into a **single** field:
+
+```
+Ψ_mixed = Σ_{i ∈ exec} ψ_i  +  Σ_{j ∈ narr} ψ_j
+```
+
+an insidious failure mode arises: iterative explanations of rising coherence (e.g. 0.50 → 0.75 → 0.95) out-accumulate concrete worker results. The field's consensus peak (`argmax_k |Ψ_k|`) then reports an *explanation* as the winning operational policy.
+
+This reproduces inside the field the classic multi-agent postmortem finding: *"my explanations improved while my execution stayed substantially the same."* The field does not prevent this on its own because wave superposition is agnostic to semantics—it faithfully measures spectral density wherever energy lands.
+
+### The separation principle
+
+Robust multi-agent CDT systems must enforce field orthogonality:
+
+* **Disjoint fields**: Narration and execution belong in separate fields (e.g. `campaign:execution` and `campaign:narration`).
+* **Policy derived strictly from execution**: Operational decisions and consensus reads (`cdt_consensus`) must be queried exclusively against the execution field.
+* **Narration as diagnostic state**: The narration field tracks comprehension, explanation quality, and diagnostic depth, but carries zero operational voting weight.
+* **Preserving legible disagreement**: Isolating narration ensures that contested execution bins (where workers submit conflicting results) remain sharp and legible in the contested spectrum `C_k = A_k − |Ψ_k|`, rather than being submerged beneath narrative volume.
+
+See [`astra_campaign/`](../astra_campaign/) for an empirical replay, run log, and polar visualization of this dynamic.
+
 ## Limits
 
 * **Key collisions.** Keys hash to phases; with `N` bins two random keys share a bin with

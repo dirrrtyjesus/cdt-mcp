@@ -1,0 +1,11 @@
+resonance(query, query+'.') = 1.00
+resonance(query, unrelated) = 0.00
+
+query: 'how does explicit decay keep replicas converging'
+top resonances: [(2, 0.16), (9, 0.16), (3, 0.15), (10, 0.15)]
+consensus bin 48 at phase 4.71 -> entries ['9']
+share 0.07, confidence 4.4x, contest ratio 0.00
+resonant region of the manuscript: [2, 3, 9, 10]
+
+CKKS: 4 writers, 323 KiB per ciphertext, max |decrypted - plaintext| = 8.65e-09
+argmax |ψ| from the decrypted field: 48 == consensus bin 48

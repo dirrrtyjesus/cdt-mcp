@@ -292,3 +292,29 @@ def test_consensus_exposes_contested_bins_and_ratio():
     assert g.consensus().contest_ratio == 0.0 and g.consensus().contested == ()
     # An empty field reports zeros.
     assert CoherenceField("e", bins=8).consensus().contest_ratio == 0.0
+
+
+def test_narration_and_execution_field_separation():
+    clock = FakeClock()
+    exec_field = CoherenceField("execution", bins=8, clock=clock)
+    narr_field = CoherenceField("narration", bins=8, clock=clock)
+
+    # Worker executes concrete action with moderate confidence
+    exec_field.write(1.0, key="action:deploy", coherence=0.6, payload="deploy v2", agent_id="worker")
+
+    # Orchestrator repeatedly explains a problem with very high confidence
+    for _ in range(3):
+        narr_field.write(
+            1.0, key="explain:bottleneck", coherence=0.95, payload="bottleneck identified", agent_id="orchestrator"
+        )
+
+    # In the isolated execution field, action remains the sole consensus
+    c_exec = exec_field.consensus()
+    assert c_exec.top_payload == "deploy v2"
+    assert c_exec.record_count == 1
+
+    # Narration field records explanations without contaminating execution policy
+    c_narr = narr_field.consensus()
+    assert c_narr.top_payload == "bottleneck identified"
+    assert c_narr.record_count == 3
+

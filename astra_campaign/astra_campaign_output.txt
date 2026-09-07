@@ -1,0 +1,31 @@
+  t  worker        result                           router adopts          one field              execution field
+----------------------------------------------------------------------------------------------------------------------
+  0  worker-1      +parent-owned-queue              parent-owned-queue     parent-owned-queue     parent-owned-queue  (contested 0.00)
+  5  worker-2      +workers-launch-broad-suites     workers-launch-broad-suites parent-owned-queue     parent-owned-queue  (contested 0.00)
+  9  orchestrator  +bottleneck-identified           workers-launch-broad-suites parent-owned-queue     parent-owned-queue  (contested 0.00)
+ 12  worker-3      -workers-launch-broad-suites     workers-launch-broad-suites parent-owned-queue     parent-owned-queue  (contested 0.57)
+ 16  worker-1      +parent-owned-queue              parent-owned-queue     parent-owned-queue     parent-owned-queue  (contested 0.41)
+ 20  orchestrator  +bottleneck-identified           parent-owned-queue     parent-owned-queue     parent-owned-queue  (contested 0.41)
+ 24  worker-2      +workers-launch-broad-suites     workers-launch-broad-suites parent-owned-queue     parent-owned-queue  (contested 0.39)
+ 27  orchestrator  +bottleneck-identified           workers-launch-broad-suites bottleneck-identified  parent-owned-queue  (contested 0.39)  <-- narration is the consensus
+ 30  worker-3      -workers-launch-broad-suites     workers-launch-broad-suites bottleneck-identified  parent-owned-queue  (contested 0.57)  <-- narration is the consensus
+ 33  worker-1      +parent-owned-queue              parent-owned-queue     parent-owned-queue     parent-owned-queue  (contested 0.47)
+
+router (last-write-wins)
+  final policy        : parent-owned-queue
+  explanation quality : 0.95  (improved every time it spoke)
+  disagreement seen   : none -- a negative result looks like any other result
+
+one field (execution + narration superposed)
+  final consensus     : parent-owned-queue
+  note                : narration briefly *was* the consensus (flagged above)
+
+execution field (narration kept in its own field)
+  consensus           : parent-owned-queue
+  share at peak       : 0.91 of coherent energy
+  confidence          : 58.3x mean bin
+  contest ratio       : 0.47 of impulse energy cancelled
+  contested bin 14    : workers-launch-broad-suites  net -0.25 from 4 results by ['worker-2', 'worker-3']
+  narration field     : amplitude 2.20, 3 explanations, 0 policy
+
+wrote /mnt/user-data/outputs/campaign_ring.png
