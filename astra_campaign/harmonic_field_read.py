@@ -227,7 +227,18 @@ def _manuscript() -> list[dict]:
         "noise": "the quick brown fox jumps over the lazy dog near the river bank at dawn",
     }
     order = [
-        "noise", "noise", "decay", "decay", "phase", "contest", "contest", "merge", "noise", "decay", "decay", "noise"
+        "noise",
+        "noise",
+        "decay",
+        "decay",
+        "phase",
+        "contest",
+        "contest",
+        "merge",
+        "noise",
+        "decay",
+        "decay",
+        "noise",
     ]
     return [{"prompt": f"τ{i} on {t}", "composition": topics[t] + f" (entry {i})"} for i, t in enumerate(order)]
 
@@ -248,8 +259,11 @@ def main() -> None:
     fr = field_read(entries, query, kernel_width=0.15)
     c = fr.consensus
     print(f"\nquery: {query!r}")
-    matching_entries = [pw.payload for pw in c.payloads if pw.weight > 0.01]
-    print(f"consensus bin {c.bin} at phase {c.phase:.2f} -> entries", matching_entries)
+    print("top resonances:", [(i, round(r, 2)) for i, r in fr.scores[:4]])
+    print(
+        f"consensus bin {c.bin} at phase {c.phase:.2f} -> entries",
+        [pw.payload for pw in c.payloads if pw.weight > 0.01],
+    )
     print(f"share {c.share:.2f}, confidence {c.confidence:.1f}x, contest ratio {c.contest_ratio:.2f}")
     region = [int(pw.payload) for alt in c.alternatives for pw in alt.payloads]
     print("resonant region of the manuscript:", sorted(set(region)))
@@ -260,8 +274,10 @@ def main() -> None:
     except ImportError:
         print("\nCKKS demo skipped: `pip install tenseal` to run the encrypted superposition")
         return
-    print(f"\nCKKS: {info['writers']} writers, {info['ciphertext_bytes_each'] // 1024} KiB per ciphertext, "
-          f"max |decrypted - plaintext| = {info['max_abs_error']:.2e}")
+    print(
+        f"\nCKKS: {info['writers']} writers, {info['ciphertext_bytes_each'] // 1024} KiB per ciphertext, "
+        f"max |decrypted - plaintext| = {info['max_abs_error']:.2e}"
+    )
     half = len(dec) // 2
     psi_enc = dec[:half] + 1j * dec[half:]
     print("argmax |ψ| from the decrypted field:", int(np.argmax(np.abs(psi_enc))), "== consensus bin", c.bin)

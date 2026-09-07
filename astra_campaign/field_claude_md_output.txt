@@ -1,0 +1,35 @@
+# CLAUDE.md  (rendered at commit 25, 5 live instructions)
+- Line length is 120; run `ruff format`.
+- Avoid the walrus operator; CI runs Python 3.8.
+- Do not add dependencies without asking.
+- Run `pytest -q` before every commit.
+- Keep the sync wrapper around the async client.  <!-- contested -->
+
+# CLAUDE.md  (rendered at commit 100, 2 live instructions)
+- Line length is 120; run `ruff format`.
+- Run `pytest -q` before every commit.
+
+# CLAUDE.md  (rendered at commit 160, 3 live instructions)
+- Run `pytest -q` before every commit.
+- Do not add dependencies without asking.
+- Line length is 120; run `ruff format`.
+
+# rationale  (commit 160)
+
+## tests:run-before-commit  energy 0.69  contested 0.00  age 40  affirmed x3 by aug, ci-bot, maya
+   @0 aug: failure: pushed a red suite twice in week one | hypothesis: agent skips tests when not told | outcome: no red pushes since
+   @42 maya: failure: red push at commit 41 | hypothesis: instruction decayed from attention | outcome: re-affirmed
+   @120 ci-bot: failure: red push at commit 118 | hypothesis: new agent version | outcome: re-affirmed
+
+## deps:no-new-without-ask  energy 0.67  contested 0.00  age 29  affirmed x2 by aug
+   @3 aug: failure: agent pulled in `requests` for one call | hypothesis: agent prefers libraries to stdlib | outcome: dependency count flat
+   @131 aug: failure: agent proposed `httpx` | hypothesis: same as before | outcome: declined, rule held
+
+## style:ruff-120  energy 0.26  contested 0.00  age 99  affirmed x2 by aug
+   @12 aug: failure: ruff failures in three PRs | hypothesis: default 88 assumed | outcome: ruff clean
+   @61 aug: failure: ruff failure in PR #88 | hypothesis: new contributor | outcome: ruff clean
+
+ratchet after 160 commits: 5 instructions, 0 deleted
+field   after 160 commits: 3 live, 11 records kept, 0 deleted
+
+wrote ../astra_campaign/ratchet.png

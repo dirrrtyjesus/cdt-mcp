@@ -294,27 +294,33 @@ def test_consensus_exposes_contested_bins_and_ratio():
     assert CoherenceField("e", bins=8).consensus().contest_ratio == 0.0
 
 
-def test_narration_and_execution_field_separation():
+def test_narration_usurps_consensus_in_a_mixed_field_and_not_in_a_split_one():
+    """The pathology has to be reproducible before the separation rule means anything.
+
+    Two execution results (coherence 0.6, 0.7) and three narration impulses of rising
+    coherence (0.5, 0.75, 0.95) at a different key. Superposed into one field, the
+    narration bin carries 2.2 against 1.3 and becomes the consensus. Written to
+    separate fields, the execution field's consensus is the execution result.
+    """
     clock = FakeClock()
-    exec_field = CoherenceField("execution", bins=8, clock=clock)
-    narr_field = CoherenceField("narration", bins=8, clock=clock)
+    mixed = CoherenceField("mixed", bins=64, clock=clock)
+    execution = CoherenceField("execution", bins=64, clock=clock)
+    narration = CoherenceField("narration", bins=64, clock=clock)
 
-    # Worker executes concrete action with moderate confidence
-    exec_field.write(1.0, key="action:deploy", coherence=0.6, payload="deploy v2", agent_id="worker")
+    for c in (0.6, 0.7):
+        for f in (mixed, execution):
+            f.write(1.0, key="action:parent-queue", coherence=c, payload="parent queue", agent_id="worker")
+    for c in (0.5, 0.75, 0.95):
+        for f in (mixed, narration):
+            f.write(1.0, key="explain:bottleneck", coherence=c, payload="bottleneck explained", agent_id="orch")
 
-    # Orchestrator repeatedly explains a problem with very high confidence
-    for _ in range(3):
-        narr_field.write(
-            1.0, key="explain:bottleneck", coherence=0.95, payload="bottleneck identified", agent_id="orchestrator"
-        )
-
-    # In the isolated execution field, action remains the sole consensus
-    c_exec = exec_field.consensus()
-    assert c_exec.top_payload == "deploy v2"
-    assert c_exec.record_count == 1
-
-    # Narration field records explanations without contaminating execution policy
-    c_narr = narr_field.consensus()
-    assert c_narr.top_payload == "bottleneck identified"
-    assert c_narr.record_count == 3
-
+    assert mixed.bin_index(phase_from_key("action:parent-queue")) != mixed.bin_index(
+        phase_from_key("explain:bottleneck")
+    )
+    # The failure: narration is the consensus of the mixed field.
+    assert mixed.consensus().top_payload == "bottleneck explained"
+    assert mixed.read(key="explain:bottleneck").amplitude == pytest.approx(2.2)
+    assert mixed.read(key="action:parent-queue").amplitude == pytest.approx(1.3)
+    # The fix: policy read from the execution field alone.
+    assert execution.consensus().top_payload == "parent queue"
+    assert narration.consensus().record_count == 3

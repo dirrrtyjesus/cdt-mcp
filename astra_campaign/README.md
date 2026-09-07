@@ -60,3 +60,36 @@ Output: `harmonic_field_read_output.txt`.
 
 Both scripts import `cdt_mcp.core`; run from the repo root with
 `pip install -e .` or `PYTHONPATH=src`.
+
+## `field_claude_md.py` — a CLAUDE.md rendered from a field
+
+The "catastrophic remembering" ratchet (Chakrabarti 2026): instructions are cheap
+to add and expensive to delete, and the rationale that justified each one decays
+faster than the instruction. A field dissolves both halves.
+
+* An instruction is an impulse with a half-life (40 commits here). It stays alive
+  only by **re-affirmation** — the failure recurs, someone writes it again, the
+  impulse re-energizes. Nothing is deleted, so there is no O(2^|D|) regression
+  risk; nothing is immortal, so there is no fossil layer.
+* The rationale (failure / hypothesis / outcome) is written to a **second field at
+  the same key**. The model renders the instruction field; the maintainer renders
+  the rationale field. Same address, two readers — the paper's hidden-comment fix
+  with the coupling made structural.
+* `contest` writes `value=-1` at the key. Against a fresh rule it flags the line
+  `<!-- contested -->`; against a stale one it wins, and the objection stays in
+  the rationale field as the record of why.
+
+Over a 160-commit history the append-only file holds 5 instructions forever; the
+field-rendered one ends at 3 live from 11 records kept, 0 deleted.
+
+```
+python field_claude_md.py --plot ratchet.png
+```
+
+Output: `field_claude_md_output.txt`, `ratchet.png`.
+
+Two things this surfaced in `core.py`, both worth their own issue: `read(now=past)`
+counts records with `timestamp > now` at full strength (age is clamped to 0), so
+the demo replays history instead of reading the past; and per-key `amplitude` is
+unsigned, so an objection that out-weighs its rule still reads as energy — the
+demo projects ψ onto the key's phasor for a signed net.
