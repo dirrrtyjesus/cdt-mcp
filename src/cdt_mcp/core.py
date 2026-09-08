@@ -205,7 +205,9 @@ class ReadResult:
     Writes at one key share one phase, so for a key read this is the net
     signed weight at that key -- positive when proposals carry it, negative
     when objections do. Use it, not ``amplitude``, to ask "is this proposal
-    alive?".
+    alive?". With ``kernel_width > 0`` neighbouring writes bleed into the
+    bin and contribute ``cos(delta phase)`` of their weight here: ``signed``
+    is alignment with the read phasor, not total energy in the bin.
     """
     payloads: tuple[PayloadWeight, ...]
 
@@ -630,13 +632,21 @@ class CoherenceField:
         return sum(1 for rec in self._records.values() if rec.timestamp <= ts)
 
     def prune(self, epsilon: float = 1e-9, now: float | None = None) -> int:
-        """Drop write records whose absolute weight fell below ``epsilon``.
+        """Drop write records that have *happened* and whose absolute weight at
+        ``now`` has decayed below ``epsilon``.
+
+        Only records with ``timestamp <= now`` are candidates. A record from the
+        future of ``now`` weighs ``0`` there (see :meth:`WriteRecord.weight`)
+        but has not faded -- it has not started -- so it is never pruned. This
+        matters for replicas whose clocks run slightly ahead: ``cdt_decay``
+        calls ``prune`` by default, and without the guard a skewed write would
+        be dropped the first time any replica decayed.
 
         Like ``max_records`` pruning this is a non-monotonic operation: a
         pruned write can be re-absorbed from a replica that still holds it.
         """
         t = self.now() if now is None else now
-        dead = [k for k, v in self._records.items() if abs(self._weight(v, t)) < epsilon]
+        dead = [k for k, v in self._records.items() if v.timestamp <= t and abs(self._weight(v, t)) < epsilon]
         for k in dead:
             del self._records[k]
         if dead:

@@ -12,8 +12,9 @@ All notable changes to this project are documented here. The format follows
   `decay_multiplier(timestamp, now)` applies only decays recorded in `[timestamp, now]`.
   `read`, `consensus`, `field`, `contested_field` and `spectral_density` with an explicit past
   `now` are now consistent with what the field looked like then. Capacity pruning ranks at a
-  time no earlier than any record, so a replica whose clock runs slightly ahead is not pruned
-  first.
+  time no earlier than any record, and `prune()` only considers records with `timestamp <= now`,
+  so a replica whose clock runs slightly ahead is neither pruned first nor dropped as "faded"
+  by the next `cdt_decay` (which prunes by default).
 
 ### Added
 - `ReadResult.signed` (and `signed` on `cdt_read`): the field's component along the read

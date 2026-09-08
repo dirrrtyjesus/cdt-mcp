@@ -28,11 +28,11 @@ import argparse
 import math
 from dataclasses import dataclass
 
-from cdt_mcp.core import CoherenceField, phase_from_key
+from cdt_mcp.core import TWO_PI, CoherenceField
 
 HALF_LIFE = 40.0  # commits: an un-affirmed instruction loses half its energy every 40 commits
 DECAY = math.log(2) / HALF_LIFE
-BINS = 1024  # enough that a handful of keys do not collide; collisions are checked anyway
+BINS = 1024  # capacity: keys get explicit slots on the ring, so this is the max instruction count
 
 
 @dataclass(frozen=True)
@@ -56,15 +56,23 @@ class FieldClaudeMd:
         rate = math.log(2) / half_life
         self.instructions = CoherenceField("claude.md:instructions", bins=bins, decay_rate=rate, clock=clock)
         self.rationale = CoherenceField("claude.md:rationale", bins=bins, decay_rate=rate, clock=clock)
-        self._bins: dict[int, str] = {}
+        # key -> explicit phase. Hashing keys onto the ring (``phase_from_key``)
+        # is right for open-world swarms where any replica must map a key to
+        # the same bin without coordination, but it collides: ~n^2/2B pairs, so
+        # 50 instructions in 4096 bins share a bin ~30% of the time. A CLAUDE.md
+        # has a closed, small keyspace, so slots are assigned in registration
+        # order and are collision-free up to ``bins``. The registry is the one
+        # thing replicas must share (it is tiny and append-only).
+        self._slots: dict[str, float] = {}
 
     # ------------------------------------------------------------ writes
 
-    def _claim(self, key: str) -> None:
-        b = self.instructions.bin_index(phase_from_key(key))
-        owner = self._bins.setdefault(b, key)
-        if owner != key:
-            raise ValueError(f"key {key!r} collides with {owner!r} in bin {b}; raise bins")
+    def _claim(self, key: str) -> float:
+        if key not in self._slots:
+            if len(self._slots) >= self.instructions.bins:
+                raise ValueError(f"no free slot for {key!r}; raise bins")
+            self._slots[key] = len(self._slots) / self.instructions.bins * TWO_PI
+        return self._slots[key]
 
     def affirm(
         self,
@@ -83,14 +91,14 @@ class FieldClaudeMd:
         Re-affirming an existing key is the *only* way an instruction stays
         alive: it superposes a fresh impulse on the decayed one.
         """
-        self._claim(key)
+        phase = self._claim(key)
         self._now = commit
         self.instructions.write(
-            1.0, key=key, coherence=coherence, agent_id=author, payload=instruction, timestamp=commit
+            1.0, phase=phase, coherence=coherence, agent_id=author, payload=instruction, timestamp=commit
         )
         self.rationale.write(
             1.0,
-            key=key,
+            phase=phase,
             coherence=coherence,
             agent_id=author,
             payload=f"failure: {failure} | hypothesis: {hypothesis} | outcome: {outcome}",
@@ -99,11 +107,11 @@ class FieldClaudeMd:
 
     def contest(self, key: str, *, reason: str, author: str, commit: float, coherence: float = 1.0) -> None:
         """Argue against an instruction without deleting it."""
-        self._claim(key)
+        phase = self._claim(key)
         self._now = commit
-        self.instructions.write(-1.0, key=key, coherence=coherence, agent_id=author, timestamp=commit)
+        self.instructions.write(-1.0, phase=phase, coherence=coherence, agent_id=author, timestamp=commit)
         self.rationale.write(
-            1.0, key=key, coherence=coherence, agent_id=author, payload=f"objection: {reason}", timestamp=commit
+            1.0, phase=phase, coherence=coherence, agent_id=author, payload=f"objection: {reason}", timestamp=commit
         )
 
     # ------------------------------------------------------------- reads
@@ -113,10 +121,11 @@ class FieldClaudeMd:
         self._now = now
         contested = self.instructions.contested_field(now=now)
         out: list[Line] = []
-        for b, key in self._bins.items():
-            r = self.instructions.read(key=key, now=now)
+        for key, phase in self._slots.items():
+            r = self.instructions.read(phase=phase, now=now)
+            b = r.bin
             # `signed`, not `amplitude`: an objection that out-weighs its rule must read as dead.
-            pos = [rec for rec in self.instructions.records if rec.key == key and rec.value > 0]
+            pos = [rec for rec in self.instructions.records if rec.phase == phase and rec.value > 0]
             latest = max(pos, key=lambda rec: rec.timestamp)
             if r.signed < floor:
                 continue
@@ -146,7 +155,8 @@ class FieldClaudeMd:
         """What the maintainer sees: the same keys, with why."""
         out = [f"# rationale  (commit {now:.0f})"]
         for ln in self.lines(now=now, floor=floor):
-            recs = sorted((r for r in self.rationale.records if r.key == ln.key), key=lambda r: r.timestamp)
+            phase = self._slots[ln.key]
+            recs = sorted((r for r in self.rationale.records if r.phase == phase), key=lambda r: r.timestamp)
             out.append(
                 f"\n## {ln.key}  energy {ln.energy:.2f}  contested {ln.contested:.2f}  "
                 f"age {ln.age:.0f}  affirmed x{ln.affirmations} by {', '.join(ln.authors)}"

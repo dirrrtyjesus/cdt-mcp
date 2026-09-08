@@ -375,3 +375,19 @@ def test_signed_read_goes_negative_when_objections_out_weigh_proposals():
     g = CoherenceField("g", bins=16, clock=clock)
     g.write(1.0, key="rule", coherence=0.6)
     assert g.read(key="rule").signed == pytest.approx(g.read(key="rule").amplitude)
+
+
+def test_prune_never_drops_a_record_from_the_future():
+    """A future write weighs 0 at `now`, which is not the same as having faded to 0."""
+    clock = FakeClock(100.0)
+    f = CoherenceField("f", bins=8, decay_rate=1.0, clock=clock)
+    f.write(1.0, key="old", timestamp=0.0)  # e^-100: faded, prunable
+    f.write(1.0, key="ahead", timestamp=103.0)  # absorbed from a replica 3s ahead
+    assert f.prune(epsilon=1e-6) == 1
+    assert [r.key for r in f.records] == ["ahead"]
+    # ...and it is fully present once the local clock catches up.
+    assert f.read(key="ahead", now=103.0).amplitude == pytest.approx(1.0)
+    # Pruning "as of" a past instant likewise cannot touch what had not happened yet.
+    g = CoherenceField("g", bins=8, decay_rate=1.0, clock=clock)
+    g.write(1.0, key="k", timestamp=50.0)
+    assert g.prune(epsilon=1e-6, now=10.0) == 0

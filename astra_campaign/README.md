@@ -94,4 +94,12 @@ strength (age was clamped to 0), so the demo had to replay history instead of
 reading the past — it now writes the history once and rewinds; and per-key
 `amplitude` is unsigned, so an objection that out-weighs its rule read as energy —
 `ReadResult.signed` is the field's component along the read phasor, and the demo
-uses it.
+uses it. A third followed from the fix: `prune()` treated a future write's weight of
+0 as "faded" and deleted it — it now only considers records that have happened.
+
+Keys here get explicit slots on the ring rather than `phase_from_key` hashes.
+Hashing is right for open-world swarms (any replica maps a key to the same bin
+with no coordination) but collides at ~n²/2B: 50 instructions in 4096 bins share
+a bin about 30% of the time. A CLAUDE.md is a closed, small keyspace, so slots
+are assigned in registration order and are collision-free up to `bins`; the
+registry is the one thing replicas must share.
