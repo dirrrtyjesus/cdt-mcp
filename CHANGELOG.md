@@ -17,6 +17,13 @@ All notable changes to this project are documented here. The format follows
   by the next `cdt_decay` (which prunes by default).
 
 ### Added
+- **`CoherenceField.compact()` / `cdt_compact`: field-conserving compaction.** Groups of write
+  records sharing `(phase, payload, sign)` that have happened by `now` are replaced by one record
+  stamped `now` with their summed weight. The field, the contested spectrum and every consensus
+  are unchanged at every later time. Summaries carry the ids they replaced (`WriteRecord.subsumes`,
+  transitive), and `absorb` honours them: originals are replaced by an arriving summary, rejected
+  after one, and overlapping summaries are not double counted, so sync remains a union. Snapshot
+  `schema_version` is now 3 (adds `subsumes` per record); older snapshots still load.
 - `ReadResult.signed` (and `signed` on `cdt_read`): the field's component along the read
   phasor, `Re(psi[bin] * e^{-i phase})`. For a key read this is the net signed weight at the
   key. `amplitude` is `|psi|` and cannot distinguish a live proposal from one whose objections

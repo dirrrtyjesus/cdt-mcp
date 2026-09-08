@@ -116,6 +116,7 @@ docker run -p 8000:8000 -v cdt-state:/state cdt-mcp
 | `cdt_sync` | Absorb a remote snapshot. Idempotent union of write events. |
 | `cdt_merge` | Superpose several local fields into one. |
 | `cdt_decay` | Record a decay event on all writes so far, then prune negligible impulses. |
+| `cdt_compact` | Rake: collapse same-phase/payload/sign writes into one record each. Field and consensus unchanged; sync stays a union. |
 | `cdt_list`, `cdt_delete`, `cdt_phase_of` | Housekeeping and the key-to-phase hash. |
 
 Resources: `cdt://fields`, `cdt://field/{name}`, `cdt://field/{name}/consensus`.
@@ -191,6 +192,10 @@ model, foundational design principles, and guarantees.
   disjoint fields. Superposing explanations into an execution field allows articulate narration to
   out-accumulate worker impulses and masquerade as consensus. Policy must be read strictly from
   execution fields (see [`docs/THEORY.md`](docs/THEORY.md)).
+* **Compaction conserves the field.** `cdt_compact` replaces groups of writes with one summary
+  record each; `Ψ`, the contested spectrum and every consensus are identical at all later times.
+  Summaries carry the ids they replaced, so replicas holding the originals converge on sync
+  instead of double counting. Snapshot `schema_version` is 3; schema 1 and 2 snapshots load.
 * **Keys hash to phases** via SHA-256, so the same key lands in the same bin on every replica.
   With 64 bins, distinct keys collide with probability ~1/64 per pair; raise `bins` if you use
   many keys in one field, or use explicit `phase` values.

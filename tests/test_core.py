@@ -156,7 +156,7 @@ def test_snapshot_roundtrip_is_json_safe_and_exact():
     f.write(2.0, key="alpha", coherence=0.4, payload="A", agent_id="agent-1")
     f.write(-1.0, phase=1.234, coherence=1.0)
     data = json.loads(json.dumps(f.to_dict(include_field=True)))
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert len(data["field"]) == 32
     assert len(data["contested"]) == 32
     g = CoherenceField.from_dict(data, clock=clock)
@@ -391,3 +391,105 @@ def test_prune_never_drops_a_record_from_the_future():
     g = CoherenceField("g", bins=8, decay_rate=1.0, clock=clock)
     g.write(1.0, key="k", timestamp=50.0)
     assert g.prune(epsilon=1e-6, now=10.0) == 0
+
+
+def _history(clock: FakeClock, **kw) -> CoherenceField:
+    """Three authors re-affirm one rule, one objects, one unrelated key; explicit decay at t=30."""
+    f = CoherenceField("h", bins=64, decay_rate=0.02, kernel_width=0.1, clock=clock, **kw)
+    f.write(1.0, key="rule", coherence=0.8, payload="keep", agent_id="a", timestamp=0.0)
+    f.write(1.0, key="rule", coherence=0.6, payload="keep", agent_id="b", timestamp=10.0)
+    f.write(-1.0, key="rule", coherence=0.5, agent_id="c", timestamp=15.0)
+    f.write(1.0, key="rule", coherence=0.9, payload="keep", agent_id="c", timestamp=20.0)
+    f.write(1.0, key="other", coherence=0.7, payload="x", agent_id="a", timestamp=5.0)
+    f.decay(dt=1.0, rate=math.log(2), timestamp=30.0)
+    return f
+
+
+def test_compact_conserves_the_field_and_the_contested_spectrum():
+    clock = FakeClock(40.0)
+    f = _history(clock)
+    before = {t: (f.field(now=t).copy(), f.contested_field(now=t).copy()) for t in (40.0, 60.0, 200.0)}
+    n_before = len(f)
+
+    removed = f.compact(now=40.0)
+
+    assert removed == 2  # three "keep" proposals -> one; objection and "other" untouched
+    assert len(f) == n_before - 2
+    for t, (psi, contested) in before.items():
+        np.testing.assert_allclose(f.field(now=t), psi, atol=1e-12)
+        np.testing.assert_allclose(f.contested_field(now=t), contested, atol=1e-12)
+    # A decay recorded after the rake scales the summary as it would have scaled each member.
+    g = _history(FakeClock(40.0))
+    f.decay(dt=1.0, rate=0.3, timestamp=50.0)
+    g.decay(dt=1.0, rate=0.3, timestamp=50.0)
+    np.testing.assert_allclose(f.field(now=80.0), g.field(now=80.0), atol=1e-12)
+    # The summary knows what it replaced and keeps the heaviest member's provenance.
+    (summary,) = [r for r in f.records if r.subsumes]
+    assert len(summary.subsumes) == 3 and summary.payload == "keep" and summary.agent_id == "c"
+    # Records from the future of `now` are never raked.
+    h = _history(FakeClock(40.0))
+    assert h.compact(now=5.0) == 0
+
+
+def test_compact_keeps_sync_a_union():
+    clock = FakeClock(40.0)
+    a = _history(clock)
+    b = CoherenceField.from_dict(a.to_dict(include_field=False), clock=clock)  # same ids
+    originals = [r for r in a.records if r.payload == "keep"]
+    a.compact(now=40.0)
+
+    # b holds the originals; absorbing a's summary replaces them.
+    assert b.absorb(a.events) == 1
+    assert len(b) == len(a)
+    np.testing.assert_allclose(b.field(now=60.0), a.field(now=60.0), atol=1e-12)
+    # The originals coming back from a stale replica are rejected, not double counted.
+    assert a.absorb(originals) == 0
+    assert b.absorb(originals) == 0
+    np.testing.assert_allclose(b.field(now=60.0), a.field(now=60.0), atol=1e-12)
+    # Idempotent both ways.
+    assert a.absorb(b.events) == 0
+    assert b.absorb(a.events) == 0
+
+
+def test_concurrent_rakes_with_overlap_yield_different_records_and_the_same_field():
+    clock = FakeClock(40.0)
+    a = _history(clock)
+    b = CoherenceField.from_dict(a.to_dict(include_field=False), clock=clock)
+    a.compact(now=40.0)
+    b.compact(now=45.0)  # same grains, different reference time
+    a.absorb(b.events)
+    b.absorb(a.events)
+    assert {r.id for r in a.records} != {r.id for r in b.records}
+    for t in (45.0, 100.0):
+        np.testing.assert_allclose(a.field(now=t), b.field(now=t), atol=1e-12)
+    assert a.absorb(b.events) == 0 and b.absorb(a.events) == 0
+
+
+def test_rake_of_a_rake_is_transitive_and_survives_a_snapshot():
+    clock = FakeClock(40.0)
+    f = _history(clock)
+    originals = {r.id for r in f.records if r.payload == "keep"}
+    f.compact(now=40.0)
+    f.write(1.0, key="rule", coherence=0.5, payload="keep", agent_id="d", timestamp=41.0)
+    f.compact(now=50.0)
+    (summary,) = [r for r in f.records if r.subsumes]
+    assert originals <= set(summary.subsumes)
+    g = CoherenceField.from_dict(json.loads(json.dumps(f.to_dict())), clock=clock)
+    np.testing.assert_allclose(g.field(now=70.0), f.field(now=70.0), atol=1e-12)
+    # The restored replica still refuses the raked originals by id.
+    fresh = CoherenceField("fresh", bins=64, decay_rate=0.02, kernel_width=0.1, clock=clock)
+    for rid in originals:
+        fresh.write(1.0, key="rule", payload="keep", timestamp=0.0, record_id=rid)
+    assert g.absorb(fresh.records) == 0
+
+
+def test_schema_2_snapshots_load_and_schema_3_is_rejected_by_older_readers():
+    clock = FakeClock(40.0)
+    f = _history(clock)
+    data = f.to_dict()
+    data["schema_version"] = 2
+    for r in data["records"]:
+        r.pop("subsumes")
+    g = CoherenceField.from_dict(data, clock=clock)
+    np.testing.assert_allclose(g.field(now=50.0), f.field(now=50.0), atol=1e-12)
+    assert all(r.subsumes == () for r in g.records)

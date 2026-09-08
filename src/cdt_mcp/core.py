@@ -65,7 +65,7 @@ ComplexField = npt.NDArray[np.complex128]
 RealField = npt.NDArray[np.float64]
 
 TWO_PI = 2.0 * math.pi
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_BINS = 64
 DEFAULT_TAU_K = 7.5
 MAX_BINS = 4096
@@ -111,6 +111,9 @@ class WriteRecord:
     agent_id: str | None = None
     payload: str | None = None
     key: str | None = None
+    subsumes: tuple[str, ...] = ()
+    """Ids of the records this one replaced by :meth:`CoherenceField.compact`
+    (transitively closed). Empty for an ordinary write."""
 
     def weight(self, now: float, decay_rate: float, explicit: float = 1.0) -> float:
         """Signed real weight of this impulse at time ``now``.
@@ -136,6 +139,7 @@ class WriteRecord:
             "agent_id": self.agent_id,
             "payload": self.payload,
             "key": self.key,
+            "subsumes": list(self.subsumes),
         }
 
     @classmethod
@@ -152,6 +156,7 @@ class WriteRecord:
             agent_id=data.get("agent_id"),
             payload=data.get("payload"),
             key=data.get("key"),
+            subsumes=tuple(str(i) for i in data.get("subsumes", ())),
         )
 
 
@@ -322,6 +327,8 @@ class CoherenceField:
         self.phase_space: RealField = np.linspace(0.0, TWO_PI, bins, endpoint=False, dtype=np.float64)
         self._records: dict[str, WriteRecord] = {}
         self._decays: dict[str, DecayRecord] = {}
+        # Every id ever replaced by a compaction this replica holds or has seen.
+        self._subsumed: set[str] = set()
         # Sorted decay timestamps and their factors, rebuilt lazily.
         self._decay_index: tuple[list[float], list[float]] | None = None
 
@@ -434,8 +441,17 @@ class CoherenceField:
             self._decay_index = None
             self.updated_at = max(self.updated_at, self.now())
             return True
-        if rec.id in self._records:
+        if rec.id in self._records or rec.id in self._subsumed:
             return False
+        if rec.subsumes:
+            # A rake from elsewhere. If it overlaps a rake we already hold, both
+            # cover the same sand from different reference times; keeping ours
+            # loses nothing. If it does not, it replaces the grains it moved.
+            if any(i in self._subsumed for i in rec.subsumes):
+                return False
+            for i in rec.subsumes:
+                self._records.pop(i, None)
+            self._subsumed.update(rec.subsumes)
         self._records[rec.id] = rec
         self.updated_at = max(self.updated_at, self.now())
         if len(self._records) > self.max_records:
@@ -652,6 +668,69 @@ class CoherenceField:
         if dead:
             self.updated_at = self.now()
         return len(dead)
+
+    def compact(self, now: float | None = None, *, min_group: int = 2) -> int:
+        """Rake the field: replace groups of write records with one record each,
+        leaving the field unchanged.
+
+        Records that have happened by ``now`` and share ``(phase, payload,
+        sign)`` are replaced by a single record stamped ``now`` whose value is
+        their summed weight at ``now``. Because every continuous and explicit
+        decay after ``now`` scales the summary exactly as it would have scaled
+        each member, ``field(t)`` is identical for all ``t >= now`` (to
+        floating-point precision), and so are the contested spectrum and
+        every consensus. Only the grain structure changes: fewer records,
+        same sand.
+
+        The summary carries the ids it replaced in ``subsumes`` (transitively,
+        so a rake of a rake still knows the original grains). ``absorb`` uses
+        that to keep sync a union: a replica that still holds the originals
+        drops them when it absorbs the summary, and originals arriving after
+        the summary are rejected. Two replicas that rake overlapping records
+        independently end with different record sets and *the same field*.
+
+        What a rake loses is provenance at grain resolution: the summary keeps
+        the payload and the agent of the heaviest member, not who wrote what
+        when. Keep that in a rationale field, which you rake less.
+
+        Returns the number of records removed. Groups smaller than
+        ``min_group`` are left alone.
+        """
+        t = self.now() if now is None else float(now)
+        groups: dict[tuple[float, str | None, bool], list[WriteRecord]] = {}
+        for rec in self._records.values():
+            if rec.timestamp > t:
+                continue
+            groups.setdefault((rec.phase, rec.payload, rec.value >= 0), []).append(rec)
+        removed = 0
+        for (phase, payload, _), members in groups.items():
+            if len(members) < min_group:
+                continue
+            weights = {m.id: self._weight(m, t) for m in members}
+            net = sum(weights.values())
+            heaviest = max(members, key=lambda m: abs(weights[m.id]))
+            subsumed: set[str] = set()
+            for m in members:
+                subsumed.add(m.id)
+                subsumed.update(m.subsumes)
+                del self._records[m.id]
+            self._subsumed.update(subsumed)
+            rid = uuid.uuid4().hex
+            self._records[rid] = WriteRecord(
+                id=rid,
+                phase=phase,
+                value=float(net),
+                coherence=1.0,
+                timestamp=t,
+                agent_id=heaviest.agent_id,
+                payload=payload,
+                key=heaviest.key,
+                subsumes=tuple(sorted(subsumed)),
+            )
+            removed += len(members) - 1
+        if removed:
+            self.updated_at = max(self.updated_at, self.now())
+        return removed
 
     # ------------------------------------------------------------------ sync
 

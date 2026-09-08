@@ -100,13 +100,47 @@ Robust multi-agent CDT systems must enforce field orthogonality:
 
 See [`astra_campaign/`](../astra_campaign/) for an empirical replay, run log, and polar visualization of this dynamic.
 
+## Raking: compaction that conserves the field
+
+Three things make a write stop mattering, and only one of them removes sand from the beach.
+*Decay* (continuous or as an event) shrinks a write's weight; the record stays. *Rendering* at
+a different `now` changes the pattern; the record stays. *Pruning* deletes records, and it is
+the one non-monotonic operation in the model.
+
+`compact(now)` is the fourth thing: a rake. Records that have happened by `now` and share
+`(phase, payload, sign)` are replaced by one record stamped `now` with their summed weight at
+`now`. Every decay after `now` — continuous or explicit — scales the summary exactly as it would
+have scaled each member, so for all `t ≥ now`
+
+```
+Ψ(t)  ·  C(t)  ·  consensus(t)      are unchanged to floating point
+```
+
+Grouping by sign keeps `Σ|w|` exact, so the contested spectrum is conserved too, not only the
+coherent field. Only the grain structure changes: fewer records, same sand.
+
+A rake must not break the union. The summary carries the ids it replaced (`subsumes`,
+transitively closed across rakes of rakes). `absorb` uses it in three ways: a summary arriving
+where the originals are held replaces them; originals arriving where a summary is held are
+rejected; a summary whose `subsumes` overlaps one already held is rejected, since both cover
+the same sand from different reference times and keeping ours loses nothing. Two replicas that
+rake overlapping records independently therefore end with **different record sets and the same
+field**, and further syncs absorb nothing. Raking is the first record-removing operation that
+keeps replicas convergent.
+
+What a rake costs is provenance at grain resolution: a summary keeps the payload and the agent
+of its heaviest member, not who wrote what when. Keep that in a rationale field, at the same
+phase, which you rake less — the pattern is the practice; the sand is what makes the practice
+possible.
+
 ## Limits
 
 * **Key collisions.** Keys hash to phases; with `N` bins two random keys share a bin with
   probability ≈ `1/N`. Use more bins or explicit phases for many-keyed fields.
 * **Pruning** (`max_records` and `prune()`) drops the weakest events. These are the only
   non-monotonic operations and can make replicas diverge; explicit decay is an event and does
-  not. Prefer continuous decay and a generous cap.
+  not, and neither does `compact()`. Prefer continuous decay, a rake, and a generous cap. If a
+  summary itself is later pruned, the ids it subsumed are forgotten with it.
 * **`tau_k`** is metadata averaged by spectral density on merge. It is informative, not a
   lattice element; don't rely on it for convergence.
 * **Field rendering is O(records × bins)**. With the default 64 bins and 10,000 records a

@@ -51,6 +51,7 @@ async def test_lists_all_tools_resources_prompts(server):
             "cdt_sync",
             "cdt_merge",
             "cdt_decay",
+            "cdt_compact",
             "cdt_delete",
             "cdt_phase_of",
         }
@@ -302,3 +303,20 @@ async def test_decay_syncs_between_replicas(store, clock):
         lc = await call(local, "cdt_consensus", field="s")
         rc = await call(remote, "cdt_consensus", field="s")
         assert lc["amplitude"] == pytest.approx(0.5) == pytest.approx(rc["amplitude"])
+
+
+async def test_compact_keeps_density_and_drops_records(server):
+    async with Client(server) as client:
+        for c in (0.3, 0.5, 0.7):
+            await call(client, "cdt_write", field="r", key="k", coherence=c, payload="p", agent_id="a")
+        await call(client, "cdt_write", field="r", key="k", coherence=0.2, value=-1.0, agent_id="b")
+        before = await call(client, "cdt_consensus", field="r")
+        c = await call(client, "cdt_compact", field="r")
+        assert c["removed"] == 2 and c["records"] == 2
+        assert c["spectral_density"] == pytest.approx(before["spectral_density"])
+        after = await call(client, "cdt_consensus", field="r")
+        assert after["top_payload"] == before["top_payload"]
+        assert after["contest_ratio"] == pytest.approx(before["contest_ratio"])
+        assert (await call(client, "cdt_compact", field="r"))["removed"] == 0  # idempotent
+        snap = (await call(client, "cdt_snapshot", field="r"))["snapshot"]
+        assert snap["schema_version"] == 3 and any(rec["subsumes"] for rec in snap["records"])

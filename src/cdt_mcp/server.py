@@ -157,6 +157,13 @@ class MergeOut(BaseModel):
     consensus: ConsensusOut
 
 
+class CompactOut(BaseModel):
+    field: str
+    removed: int = Field(description="Write records replaced by summaries (records after = before - removed)")
+    records: int
+    spectral_density: float = Field(description="Unchanged by compaction, reported so the caller can check")
+
+
 class DecayOut(BaseModel):
     field: str
     decay_id: str = Field(description="Id of the recorded decay event (synced with the field)")
@@ -484,6 +491,23 @@ def create_server(store: FieldStore | None = None, *, name: str = "cdt-mcp") -> 
                 pruned=pruned,
                 spectral_density=f.spectral_density(),
             )
+
+    @server.tool(annotations=IDEMPOTENT_WRITE)
+    async def cdt_compact(field: str, min_group: int = 2) -> CompactOut:
+        """Rake the field: collapse groups of writes at one phase/payload/sign into one record each.
+
+        The field, the contested spectrum and every consensus are unchanged
+        at every future time; only the record count drops. Summaries carry
+        the ids they replaced, so syncing with replicas that still hold the
+        originals stays a union (they drop the originals, never double count).
+        Loses per-record provenance inside a group; keep rationale elsewhere.
+        """
+        async with store.lock:
+            f = _get(store, field)
+            removed = f.compact(min_group=min_group)
+            if removed:
+                store.flush(field)
+            return CompactOut(field=field, removed=removed, records=len(f), spectral_density=f.spectral_density())
 
     @server.tool(annotations=DESTRUCTIVE)
     async def cdt_delete(field: str) -> DeleteOut:
